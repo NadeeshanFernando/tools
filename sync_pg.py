@@ -423,6 +423,9 @@ def restore_into_local(conf: Dict[str, str]) -> None:
         "-U", local["user"],
         "-d", local["dbname"],
         "-Fc",
+        "--no-owner",            # ignore original owners from dump
+        "--no-acl",              # ignore GRANT/REVOKE from dump
+        "--role", local["user"], # make restored objects owned by LOCAL_USER
         str(BACKUP_FILE)
     ]
     rc = run_tool(tool, args, password=local.get("password"))
