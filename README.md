@@ -7,13 +7,13 @@ It supports testing connections, creating backups, restoring into local DBs, and
 ---
 
 ## 📂 What’s in the folder
-- **`sync_pg.py`** → the sync tool (double-click on RUN ME.bat or run in Command Prompt `py sync_pg.py`)  
+- **`sync_pg.py`** → the sync tool (double-click on run me.bat or run in Command Prompt `py sync_pg.py`)  
 - **`db.conf`** → configuration file (edit this with your DB details)  
 
 ---
 
 ## ⚙️ How to use
-1. Place `sync_pg.py`, `RUN ME.bat` and `db.conf` together in any folder.  
+1. Place `sync_pg.py`, `run me.bat` and `db.conf` together in any folder.  
 2. Edit `db.conf` to match your DB credentials:
    ```ini
    HOST=host.example.com
@@ -34,7 +34,7 @@ It supports testing connections, creating backups, restoring into local DBs, and
    # PG_BIN=C:\Program Files\PostgreSQL\16\bin
    ```
 3. Run the tool:
-   - Double-click `RUN ME.bat`
+   - Double-click `run me.bat`
 ---
 
 ## 📋 Menu Options
