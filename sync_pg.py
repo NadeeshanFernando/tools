@@ -262,17 +262,40 @@ def is_loopback_host(host: str) -> bool:
         return False
 
 def _must_bool(conf: Dict[str, str], key: str, default_true: bool) -> bool:
-    v = conf.get(key, "true" if default_true else "false").strip().lower()
-    return v in ("1", "true", "yes", "y")
+    v = conf.get(key, "true" if default_true else "false")
+    # strip any inline comments and whitespace
+    v = v.split("#", 1)[0].split("::", 1)[0].strip().lower()
+    return v in ("1", "true", "yes", "y", "on")
 
-def guard_local_only(params: Dict[str, str], op_name: str) -> bool:
+def guard_local_only(params: Dict[str, str], op_name: str, conf: Dict[str, str]) -> bool:
+    """
+    If LOCAL_MUST_BE_LOOPBACK=true, only allow localhost/127.0.0.1/::1 for destructive ops.
+    If false, allow any host.
+    """
+    require_loopback = _must_bool(conf, "LOCAL_MUST_BE_LOOPBACK", True)
     host = params["host"].strip().lower()
-    if host in ("localhost", "127.0.0.1", "::1"):
+
+    if not require_loopback:
+        return True  # bypass restriction when flag is false
+
+    if host in ("localhost", "127.0.0.1", "::1") or is_loopback_host(host):
         return True
+
     print(f"{Fore.RED}Refusing {op_name}: LOCAL host is '{host}', must be localhost/127.0.0.1/::1{Style.RESET_ALL}")
     return False
 
 # ---------- DB helpers ----------
+def _fmt_bytes(n: Optional[int]) -> str:
+    if n is None:
+        return "-"
+    units = ["B", "KB", "MB", "GB", "TB"]
+    i = 0
+    v = float(n)
+    while v >= 1024 and i < len(units) - 1:
+        v /= 1024.0
+        i += 1
+    return f"{v:.2f} {units[i]}"
+
 def conn_params(prefix: str, conf: Dict[str, str]) -> Dict[str, str]:
     return {
         "host": conf[f"{prefix}"].strip(),
@@ -339,7 +362,7 @@ def database_exists(params: Dict[str, str], dbname: str) -> bool:
 
 def drop_schema_public(params: Dict[str, str], conf: Dict[str, str]) -> None:
     op_name = "DROP/RECREATE SCHEMA public"
-    if not guard_local_only(params, op_name):
+    if not guard_local_only(params, op_name, conf):
         return
     try:
         conn = psycopg2.connect(**params)
@@ -371,6 +394,10 @@ def create_database(params: Dict[str, str], new_db: str) -> bool:
         return False
 
 def restore_into_local(conf: Dict[str, str]) -> None:
+    # Hard stop if host isn't loopback and policy requires it
+    if not guard_local_only(local, "RESTORE into LOCAL", conf):
+        return
+    
     if not BACKUP_FILE.exists():
         print(f"{Fore.RED}Backup file not found: {BACKUP_FILE}. Run a backup first.{Style.RESET_ALL}")
         return
@@ -380,18 +407,13 @@ def restore_into_local(conf: Dict[str, str]) -> None:
 
     local = conn_params("LOCAL", conf)
 
-    # Hard stop if host isn't loopback and policy requires it
-    if _must_bool(conf, "LOCAL_MUST_BE_LOOPBACK", True) and not is_loopback_host(local["host"]):
-        print(f"{Fore.RED}Refusing restore: LOCAL host '{local['host']}' is not loopback (127.0.0.1/::1).{Style.RESET_ALL}")
-        return
-
     dbname = local["dbname"]
     exists = database_exists(local, dbname)
     if not exists:
         # Guard the "create + restore" path as well
         prospective = local.copy()
         op_name = f"CREATE DATABASE + RESTORE into '{dbname}'"
-        if not guard_local_only(prospective, op_name):
+        if not guard_local_only(prospective, op_name, conf):
             return
         print(f"{Fore.YELLOW}LOCAL DB '{dbname}' not found. Creating...{Style.RESET_ALL}")
         if not create_database(local, dbname):
@@ -410,7 +432,7 @@ def restore_into_local(conf: Dict[str, str]) -> None:
                 return
             prospective = local.copy()
             prospective["dbname"] = new_db
-            if not guard_local_only(prospective, f"CREATE DATABASE + RESTORE into '{new_db}'"):
+            if not guard_local_only(prospective, f"CREATE DATABASE + RESTORE into '{new_db}'", conf):
                 return
             if not create_database(local, new_db):
                 return
@@ -457,6 +479,74 @@ def compare_table_counts(conf: Dict[str, str]) -> None:
         else:
             print(f"{Fore.YELLOW}Counts differ.{Style.RESET_ALL}")
 
+def _list_public_tables(params: Dict[str, str]) -> list[str]:
+    sql_q = """
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind = 'r'
+        ORDER BY c.relname
+    """
+    names: list[str] = []
+    try:
+        with psycopg2.connect(**params) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_q)
+                for (name,) in cur.fetchall():
+                    names.append(name)
+    except Exception as e:
+        print(f"{Fore.RED}Failed to list tables for {params.get('dbname')}: {e}{Style.RESET_ALL}")
+    return names
+
+def _count_rows(params: Dict[str, str], table: str) -> Optional[int]:
+    try:
+        with psycopg2.connect(**params) as conn:
+            with conn.cursor() as cur:
+                q = sql.SQL("SELECT COUNT(*) FROM {}.{}").format(
+                    sql.Identifier("public"),
+                    sql.Identifier(table),
+                )
+                cur.execute(q)
+                return int(cur.fetchone()[0])
+    except Exception as e:
+        print(f"{Fore.RED}Count failed for {params.get('dbname')}.{table}: {e}{Style.RESET_ALL}")
+        return None
+
+def compare_table_row_counts(conf: Dict[str, str]) -> None:
+    """
+    Prints per-table row counts (exact COUNT(*)) for HOST vs LOCAL over schema 'public'.
+    Shows ALL tables; no truncation, no diffs—just counts.
+    """
+    host = conn_params("HOST", conf)
+    local = conn_params("LOCAL", conf)
+
+    print(f"{Fore.CYAN}Comparing per-table ROW COUNTS (schema=public){Style.RESET_ALL}")
+
+    host_tables = _list_public_tables(host)
+    local_tables = _list_public_tables(local)
+    all_tables = sorted(set(host_tables) | set(local_tables))
+
+    # header
+    print(f"{'Table':<40} {'HOST rows':>12} {'LOCAL rows':>12}")
+    print("-" * 70)
+
+    total_host = 0
+    total_local = 0
+
+    for t in all_tables:
+        h = _count_rows(host, t) if t in host_tables else None
+        l = _count_rows(local, t) if t in local_tables else None
+        if h is not None:
+            total_host += h
+        if l is not None:
+            total_local += l
+        h_txt = "-" if h is None else f"{h:,}"
+        l_txt = "-" if l is None else f"{l:,}"
+        print(f"{t:<40} {h_txt:>12} {l_txt:>12}")
+
+    print("-" * 70)
+    print(f"{'TOTAL':<40} {total_host:>12,} {total_local:>12,}")
+
 # ---------- Main Menu ----------
 def main_menu(conf: Dict[str, str]) -> None:
     while True:
@@ -470,14 +560,20 @@ def main_menu(conf: Dict[str, str]) -> None:
         print("3. Backup HOST DB")
         print("4. Restore Into LOCAL DB")
         print("5. Compare Table Counts")
-        print("6. Exit")
+        print("6. Compare Row Counts (per table)")
+        print("7. Exit")
         choice = input("Enter choice: ").strip()
         if choice == "1":
             test_connection("HOST", conn_params("HOST", conf))
             input("Press Enter to continue...")
             clear_screen()
         elif choice == "2":
-            test_connection("LOCAL", conn_params("LOCAL", conf))
+            local = conn_params("LOCAL", conf)
+            if not guard_local_only(local, "TEST LOCAL CONNECTION", conf):
+                input("Press Enter to continue...")
+                clear_screen()
+                continue
+            test_connection("LOCAL", local)
             input("Press Enter to continue...")
             clear_screen()
         elif choice == "3":
@@ -493,6 +589,10 @@ def main_menu(conf: Dict[str, str]) -> None:
             input("Press Enter to continue...")
             clear_screen()
         elif choice == "6":
+            compare_table_row_counts(conf)
+            input("Press Enter to continue...")
+            clear_screen()
+        elif choice == "7":
             print("Bye!")
             break
         else:
