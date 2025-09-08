@@ -5,13 +5,13 @@ use serde::Deserialize;
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
     pub id: String,
-    pub db_type: String,           // "postgres" | "mysql" | "mariadb" | "mssql" | "sqlite" | "oracle" | "mongodb"
+    pub db_type: String, // "postgres" | "mysql" | "mariadb" | "mssql" | "sqlite" | "oracle" | "mongodb"
 
     // network engines
     pub host: Option<String>,
     pub port: Option<String>,
-    pub database: Option<String>,      // pg/mysql/mariadb/mssql; for Mongo = Auth DB (default "admin")
-    pub service_name: Option<String>,  // oracle
+    pub database: Option<String>, // pg/mysql/mariadb/mssql; for Mongo = Auth DB (default "admin")
+    pub service_name: Option<String>, // oracle
     pub user: Option<String>,
     pub password: Option<String>,
 
@@ -26,13 +26,13 @@ pub struct Profile {
 #[tauri::command]
 async fn test_connection(profile: Profile) -> Result<(), String> {
     match profile.db_type.as_str() {
-        "postgres"              => test_pg(&profile).await,
-        "mysql" | "mariadb"     => test_mysql(&profile).await,
-        "mssql"                 => test_mssql(&profile).await,
-        "sqlite"                => test_sqlite(&profile),
-        "oracle"                => test_oracle_sqlplus(&profile).await,
-        "mongodb"               => test_mongodb(&profile).await,
-        other                   => Err(format!("Unsupported dbType: {other}")),
+        "postgres" => test_pg(&profile).await,
+        "mysql" | "mariadb" => test_mysql(&profile).await,
+        "mssql" => test_mssql(&profile).await,
+        "sqlite" => test_sqlite(&profile),
+        "oracle" => test_oracle_sqlplus(&profile).await,
+        "mongodb" => test_mongodb(&profile).await,
+        other => Err(format!("Unsupported dbType: {other}")),
     }
 }
 
@@ -40,19 +40,22 @@ async fn test_connection(profile: Profile) -> Result<(), String> {
 async fn test_pg(p: &Profile) -> Result<(), String> {
     let host = p.host.as_deref().unwrap_or("localhost");
     let port = p.port.as_deref().unwrap_or("5432");
-    let db   = p.database.as_deref().unwrap_or("postgres");
+    let db = p.database.as_deref().unwrap_or("postgres");
     let user = p.user.as_deref().ok_or("Missing user")?;
     let pass = p.password.as_deref().unwrap_or("");
 
     let conn_str = format!(
         "host={} port={} dbname={} user={} password={}",
-        host, port, db, user, pass
+        host,
+        port,
+        db,
+        user,
+        pass
     );
 
-    let (client, connection) =
-        tokio_postgres::connect(&conn_str, tokio_postgres::NoTls)
-            .await
-            .map_err(|e| format!("db error: {e}"))?;
+    let (client, connection) = tokio_postgres
+        ::connect(&conn_str, tokio_postgres::NoTls).await
+        .map_err(|e| format!("db error: {e}"))?;
 
     tauri::async_runtime::spawn(async move {
         let _ = connection.await;
@@ -64,8 +67,8 @@ async fn test_pg(p: &Profile) -> Result<(), String> {
 
 /* ---------------------------- MySQL / MariaDB ------------------------------ */
 async fn test_mysql(p: &Profile) -> Result<(), String> {
-    use mysql_async::{Pool, OptsBuilder};
-    use tokio::time::{timeout, Duration};
+    use mysql_async::{ Pool, OptsBuilder };
+    use tokio::time::{ timeout, Duration };
 
     // Host/IP
     let mut host = p.host.as_deref().unwrap_or("localhost").to_string();
@@ -74,7 +77,7 @@ async fn test_mysql(p: &Profile) -> Result<(), String> {
     }
 
     let port: u16 = p.port.as_deref().unwrap_or("3306").parse().unwrap_or(3306);
-    let db   = p.database.as_deref().unwrap_or("mysql").to_string();
+    let db = p.database.as_deref().unwrap_or("mysql").to_string();
     let user = p.user.as_deref().ok_or("Missing user")?.to_string();
     let pass = p.password.as_deref().unwrap_or("").to_string();
 
@@ -94,37 +97,44 @@ async fn test_mysql(p: &Profile) -> Result<(), String> {
 
     // CONNECT (hard timeout)
     eprintln!("[mysql] connecting…");
-    let mut conn = timeout(Duration::from_secs(10), pool.get_conn())
-        .await
+    let mut conn = timeout(Duration::from_secs(10), pool.get_conn()).await
         .map_err(|_| "db error: connect timed out".to_string())?
-        .map_err(|e| { eprintln!("[mysql] connect error: {e}"); format!("db error: {e}") })?;
+        .map_err(|e| {
+            eprintln!("[mysql] connect error: {e}");
+            format!("db error: {e}")
+        })?;
     eprintln!("[mysql] connected.");
 
     // PROBE QUERY (hard timeout)
     use mysql_async::prelude::Queryable;
     eprintln!("[mysql] running probe: SELECT 1");
-    timeout(Duration::from_secs(5), Queryable::query_drop(&mut conn, "SELECT 1"))
-        .await
+    timeout(Duration::from_secs(5), Queryable::query_drop(&mut conn, "SELECT 1")).await
         .map_err(|_| "db error: query timed out".to_string())?
-        .map_err(|e| { eprintln!("[mysql] query error: {e}"); format!("db error: {e}") })?;
+        .map_err(|e| {
+            eprintln!("[mysql] query error: {e}");
+            format!("db error: {e}")
+        })?;
     eprintln!("[mysql] probe OK.");
 
     // CLEANUP
-    let _ = pool.disconnect().await;
-    eprintln!("[mysql] disconnected.");
+    let h = pool.disconnect();
+    tauri::async_runtime::spawn(async move {
+        let _ = h.await;
+        eprintln!("[mysql] disconnected.");
+    });
     Ok(())
 }
 
 /* -------------------------------- SQL Server ------------------------------- */
 async fn test_mssql(p: &Profile) -> Result<(), String> {
-    use tiberius::{AuthMethod, Client, Config};
+    use tiberius::{ AuthMethod, Client, Config };
     use tokio::net::TcpStream;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{ timeout, Duration };
     use tokio_util::compat::TokioAsyncReadCompatExt; // compat wrapper
 
     let host = p.host.as_deref().unwrap_or("localhost");
     let port: u16 = p.port.as_deref().unwrap_or("1433").parse().unwrap_or(1433);
-    let db   = p.database.as_deref().unwrap_or("master");
+    let db = p.database.as_deref().unwrap_or("master");
     let user = p.user.as_deref().ok_or("Missing user")?;
     let pass = p.password.as_deref().unwrap_or("");
 
@@ -136,8 +146,7 @@ async fn test_mssql(p: &Profile) -> Result<(), String> {
     config.trust_cert(); // dev only
 
     let addr = format!("{host}:{port}");
-    let stream = timeout(Duration::from_secs(10), TcpStream::connect(addr))
-        .await
+    let stream = timeout(Duration::from_secs(10), TcpStream::connect(addr)).await
         .map_err(|_| "db error: connect timed out".to_string())?
         .map_err(|e| format!("db error: {e}"))?;
 
@@ -145,10 +154,9 @@ async fn test_mssql(p: &Profile) -> Result<(), String> {
 
     let compat = stream.compat();
 
-    let _client: Client<_> =
-        Client::connect(config, compat)
-            .await
-            .map_err(|e| format!("db error: {e}"))?;
+    let _client: Client<_> = Client::connect(config, compat).await.map_err(|e|
+        format!("db error: {e}")
+    )?;
 
     Ok(())
 }
@@ -165,11 +173,11 @@ fn test_sqlite(p: &Profile) -> Result<(), String> {
 /* --------------------------------- Oracle ---------------------------------- */
 async fn test_oracle_sqlplus(p: &Profile) -> Result<(), String> {
     use tokio::process::Command;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{ timeout, Duration };
 
     let host = p.host.as_deref().unwrap_or("localhost");
     let port = p.port.as_deref().unwrap_or("1521");
-    let svc  = p.service_name.as_deref().ok_or("Missing serviceName")?;
+    let svc = p.service_name.as_deref().ok_or("Missing serviceName")?;
     let user = p.user.as_deref().ok_or("Missing user")?;
     let pass = p.password.as_deref().unwrap_or("");
 
@@ -178,8 +186,7 @@ async fn test_oracle_sqlplus(p: &Profile) -> Result<(), String> {
     let mut cmd = Command::new("sqlplus");
     cmd.arg("-L").arg("-S").arg(&conn).arg("EXIT");
 
-    let output = timeout(Duration::from_secs(10), cmd.output())
-        .await
+    let output = timeout(Duration::from_secs(10), cmd.output()).await
         .map_err(|_| "db error: connect timed out".to_string())?
         .map_err(|e| format!("db error: {e}"))?;
 
@@ -195,22 +202,20 @@ async fn test_oracle_sqlplus(p: &Profile) -> Result<(), String> {
 
 /* --------------------------------- MongoDB --------------------------------- */
 async fn test_mongodb(p: &Profile) -> Result<(), String> {
-    use mongodb::{Client, options::{ClientOptions, ServerAddress, Credential}};
+    use mongodb::{ Client, options::{ ClientOptions, ServerAddress, Credential } };
     use bson::doc;
-    use tokio::time::{timeout, Duration};
+    use tokio::time::{ timeout, Duration };
 
     // URI path (Atlas or custom): parse options async, then ping with timeout
     if let Some(uri) = &p.connection_uri {
-        let mut opts = timeout(Duration::from_secs(10), ClientOptions::parse(uri.as_str()))
-            .await
+        let mut opts = timeout(Duration::from_secs(10), ClientOptions::parse(uri.as_str())).await
             .map_err(|_| "db error: connect timed out".to_string())?
             .map_err(|e| format!("db error: {e}"))?;
         opts.server_selection_timeout = Some(Duration::from_secs(10));
         opts.connect_timeout = Some(Duration::from_secs(10));
         let client = Client::with_options(opts).map_err(|e| format!("db error: {e}"))?;
         let admin = client.database("admin");
-        timeout(Duration::from_secs(12), admin.run_command(doc! {"ping": 1}, None))
-            .await
+        timeout(Duration::from_secs(12), admin.run_command(doc! { "ping": 1 }, None)).await
             .map_err(|_| "db error: connect timed out".to_string())?
             .map_err(|e| format!("db error: {e}"))?;
         return Ok(());
@@ -231,18 +236,13 @@ async fn test_mongodb(p: &Profile) -> Result<(), String> {
 
     if user.is_some() || pass.is_some() {
         opts.credential = Some(
-            Credential::builder()
-                .username(user)
-                .password(pass)
-                .source(Some(auth_db))
-                .build()
+            Credential::builder().username(user).password(pass).source(Some(auth_db)).build()
         );
     }
 
     let client = Client::with_options(opts).map_err(|e| format!("db error: {e}"))?;
     let admin = client.database("admin");
-    timeout(Duration::from_secs(12), admin.run_command(doc! {"ping": 1}, None))
-        .await
+    timeout(Duration::from_secs(12), admin.run_command(doc! { "ping": 1 }, None)).await
         .map_err(|_| "db error: connect timed out".to_string())?
         .map_err(|e| format!("db error: {e}"))?;
     Ok(())
@@ -251,7 +251,8 @@ async fn test_mongodb(p: &Profile) -> Result<(), String> {
 /* -------------------------------- App wiring ------------------------------- */
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    tauri::Builder
+        ::default()
         .invoke_handler(tauri::generate_handler![test_connection])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

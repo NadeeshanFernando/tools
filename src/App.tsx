@@ -91,19 +91,34 @@ const DB_META: Record<
     label: "MySQL",
     defaultPort: "3306",
     needs: ["host", "port", "database", "user", "password"],
-    placeholders: { host: "localhost", port: "3306", database: "mysql", user: "root" },
+    placeholders: {
+      host: "localhost",
+      port: "3306",
+      database: "mysql",
+      user: "root",
+    },
   },
   mariadb: {
     label: "MariaDB",
     defaultPort: "3306",
     needs: ["host", "port", "database", "user", "password"],
-    placeholders: { host: "localhost", port: "3306", database: "mysql", user: "root" },
+    placeholders: {
+      host: "localhost",
+      port: "3306",
+      database: "mysql",
+      user: "root",
+    },
   },
   mssql: {
     label: "SQL Server",
     defaultPort: "1433",
     needs: ["host", "port", "database", "user", "password"],
-    placeholders: { host: "localhost", port: "1433", database: "master", user: "sa" },
+    placeholders: {
+      host: "localhost",
+      port: "1433",
+      database: "master",
+      user: "sa",
+    },
   },
   sqlite: {
     label: "SQLite",
@@ -212,7 +227,8 @@ const loadProfiles = (): Conn[] => {
   return migrateV1ToV2();
 };
 
-const saveProfiles = (arr: Conn[]) => localStorage.setItem(LS_KEY, JSON.stringify(arr));
+const saveProfiles = (arr: Conn[]) =>
+  localStorage.setItem(LS_KEY, JSON.stringify(arr));
 
 /** ---------- UI bits ---------- */
 const Label = ({ children }: { children: React.ReactNode }) => (
@@ -330,14 +346,16 @@ function friendlyMsg(raw: string, dbType: DbType) {
   if (dbType === "sqlite" && /unable to open database file/i.test(txt))
     return "Cannot open SQLite file. Check path and permissions.";
   if (dbType === "oracle") {
-    if (/ORA-01017/i.test(txt)) return "Invalid Oracle username or password (ORA-01017).";
+    if (/ORA-01017/i.test(txt))
+      return "Invalid Oracle username or password (ORA-01017).";
     if (/ORA-12514/i.test(txt))
       return "Service name not registered (ORA-12514). Check serviceName.";
     if (/ORA-12541|TNS:no listener/i.test(txt))
       return "Listener not reachable (ORA-12541). Ensure port 1521 and listener are running.";
   }
   if (dbType === "mongodb") {
-    if (/SRV|TXT record|dns/i.test(txt)) return "DNS/SRV issue. Check your Mongo SRV URI or DNS.";
+    if (/SRV|TXT record|dns/i.test(txt))
+      return "DNS/SRV issue. Check your Mongo SRV URI or DNS.";
     if (/auth/i.test(txt))
       return "Mongo authentication failed. Check user/password and Auth DB.";
   }
@@ -345,7 +363,9 @@ function friendlyMsg(raw: string, dbType: DbType) {
 }
 
 function makeDefaultForm(dbType: DbType): FormState {
-  return dbType === "sqlite" ? { ...newSqliteConn() } : { ...newNetworkConn(dbType), password: "" };
+  return dbType === "sqlite"
+    ? { ...newSqliteConn() }
+    : { ...newNetworkConn(dbType), password: "" };
 }
 
 function validateForm(form: FormState): string | null {
@@ -390,7 +410,11 @@ let lastReqId = 0;
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
-async function withTimeout<T>(p: Promise<T>, ms: number, label = "operation"): Promise<T> {
+async function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  label = "operation"
+): Promise<T> {
   const t = sleep(ms).then(() => {
     throw new Error(`${label} timed out`);
   });
@@ -453,8 +477,16 @@ export default function App() {
     if (!selected) return;
     const copy: Conn =
       selected.dbType === "sqlite"
-        ? { ...(selected as SqliteConn), id: String(Date.now()), name: selected.name + " (copy)" }
-        : { ...(selected as NetworkConn), id: String(Date.now()), name: selected.name + " (copy)" };
+        ? {
+            ...(selected as SqliteConn),
+            id: String(Date.now()),
+            name: selected.name + " (copy)",
+          }
+        : {
+            ...(selected as NetworkConn),
+            id: String(Date.now()),
+            name: selected.name + " (copy)",
+          };
     const next = [...profiles, copy];
     setProfiles(next);
     saveProfiles(next);
@@ -496,8 +528,10 @@ export default function App() {
   function onDbTypeChange(nextType: DbType) {
     setForm((prev) => {
       const id = (prev as any).id || String(Date.now());
-      const name = (prev as any).name || `${DB_META[nextType].label} Connection`;
-      if (nextType === "sqlite") return { id, name, dbType: "sqlite", filePath: "" };
+      const name =
+        (prev as any).name || `${DB_META[nextType].label} Connection`;
+      if (nextType === "sqlite")
+        return { id, name, dbType: "sqlite", filePath: "" };
       const meta = DB_META[nextType];
       return {
         id,
@@ -543,11 +577,7 @@ export default function App() {
     setNotice({ kind: "loading", msg: "Testing connection…" });
 
     try {
-      await withTimeout(
-        invoke("test_connection", { profile: form }), // backend branches by dbType (camelCase fields)
-        15000,
-        "Connection test"
-      );
+      await invoke<string>("test_connection", { profile: form });
       if (reqId === lastReqId) {
         setNotice({ kind: "ok", msg: "Connection OK" });
       }
@@ -565,14 +595,22 @@ export default function App() {
   const previewFor = (p: Conn) => {
     if (p.dbType === "sqlite") return (p as SqliteConn).filePath || "No file";
     if (p.dbType === "oracle")
-      return `${(p as NetworkConn).user}@${(p as NetworkConn).host}:${(p as NetworkConn).port}/${(p as NetworkConn).serviceName}`;
+      return `${(p as NetworkConn).user}@${(p as NetworkConn).host}:${
+        (p as NetworkConn).port
+      }/${(p as NetworkConn).serviceName}`;
     if (p.dbType === "mongodb") {
       const uri = (p as NetworkConn).connectionUri?.trim();
       return uri && uri.length > 0
         ? uri
-        : `${(p as NetworkConn).user || "(no-auth)"}@${(p as NetworkConn).host}:${(p as NetworkConn).port}/${(p as NetworkConn).database || "admin"}`;
+        : `${(p as NetworkConn).user || "(no-auth)"}@${
+            (p as NetworkConn).host
+          }:${(p as NetworkConn).port}/${
+            (p as NetworkConn).database || "admin"
+          }`;
     }
-    return `${(p as NetworkConn).user}@${(p as NetworkConn).host}:${(p as NetworkConn).port}/${(p as NetworkConn).database}`;
+    return `${(p as NetworkConn).user}@${(p as NetworkConn).host}:${
+      (p as NetworkConn).port
+    }/${(p as NetworkConn).database}`;
   };
 
   return (
@@ -675,11 +713,21 @@ export default function App() {
         <div style={{ display: "grid", gap: 10, maxWidth: 620 }}>
           {/* DB Type with badge */}
           <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginBottom: 4,
+              }}
+            >
               <Label>Database Type</Label>
               <DbIcon type={form.dbType} />
             </div>
-            <Select value={form.dbType} onChange={(e) => onDbTypeChange(e.target.value as DbType)}>
+            <Select
+              value={form.dbType}
+              onChange={(e) => onDbTypeChange(e.target.value as DbType)}
+            >
               <option value="postgres">PostgreSQL</option>
               <option value="mysql">MySQL</option>
               <option value="mariadb">MariaDB</option>
@@ -696,7 +744,9 @@ export default function App() {
             <Field
               placeholder={`${DB_META[form.dbType].label} – My DB`}
               value={(form as any).name}
-              onChange={(e) => setForm({ ...(form as any), name: e.target.value })}
+              onChange={(e) =>
+                setForm({ ...(form as any), name: e.target.value })
+              }
             />
           </div>
 
@@ -707,10 +757,13 @@ export default function App() {
               <Field
                 placeholder={meta.placeholders?.filePath || ""}
                 value={(form as SqliteConn).filePath}
-                onChange={(e) => setForm({ ...(form as SqliteConn), filePath: e.target.value })}
+                onChange={(e) =>
+                  setForm({ ...(form as SqliteConn), filePath: e.target.value })
+                }
               />
               <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
-                Tip: point to an existing .db file (the app won’t create it during test).
+                Tip: point to an existing .db file (the app won’t create it
+                during test).
               </div>
             </div>
           ) : form.dbType === "mongodb" ? (
@@ -722,22 +775,38 @@ export default function App() {
                   placeholder={meta.placeholders?.connectionUri || ""}
                   value={(form as NetworkConn).connectionUri || ""}
                   onChange={(e) =>
-                    setForm({ ...(form as NetworkConn), connectionUri: e.target.value })
+                    setForm({
+                      ...(form as NetworkConn),
+                      connectionUri: e.target.value,
+                    })
                   }
                 />
               </div>
 
               {/* Manual mode */}
               <div style={{ height: 1, background: "#eee", margin: "6px 0" }} />
-              <div style={{ fontSize: 12, color: "#666" }}>Or fill manual settings:</div>
+              <div style={{ fontSize: 12, color: "#666" }}>
+                Or fill manual settings:
+              </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "2fr 1fr",
+                  gap: 10,
+                }}
+              >
                 <div>
                   <Label>Host</Label>
                   <Field
                     placeholder={meta.placeholders?.host || "localhost"}
                     value={(form as NetworkConn).host}
-                    onChange={(e) => setForm({ ...(form as NetworkConn), host: e.target.value })}
+                    onChange={(e) =>
+                      setForm({
+                        ...(form as NetworkConn),
+                        host: e.target.value,
+                      })
+                    }
                   />
                 </div>
                 <div>
@@ -745,19 +814,33 @@ export default function App() {
                   <Field
                     placeholder={meta.defaultPort || "27017"}
                     value={(form as NetworkConn).port}
-                    onChange={(e) => setForm({ ...(form as NetworkConn), port: e.target.value })}
+                    onChange={(e) =>
+                      setForm({
+                        ...(form as NetworkConn),
+                        port: e.target.value,
+                      })
+                    }
                   />
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: 10,
+                }}
+              >
                 <div>
                   <Label>Auth DB</Label>
                   <Field
                     placeholder={meta.placeholders?.database || "admin"}
                     value={(form as NetworkConn).database || ""}
                     onChange={(e) =>
-                      setForm({ ...(form as NetworkConn), database: e.target.value })
+                      setForm({
+                        ...(form as NetworkConn),
+                        database: e.target.value,
+                      })
                     }
                   />
                 </div>
@@ -766,7 +849,12 @@ export default function App() {
                   <Field
                     placeholder={meta.placeholders?.user || ""}
                     value={(form as NetworkConn).user}
-                    onChange={(e) => setForm({ ...(form as NetworkConn), user: e.target.value })}
+                    onChange={(e) =>
+                      setForm({
+                        ...(form as NetworkConn),
+                        user: e.target.value,
+                      })
+                    }
                   />
                 </div>
               </div>
@@ -777,19 +865,32 @@ export default function App() {
                   type="password"
                   placeholder="••••••••"
                   value={(form as any).password || ""}
-                  onChange={(e) => setForm({ ...(form as any), password: e.target.value })}
+                  onChange={(e) =>
+                    setForm({ ...(form as any), password: e.target.value })
+                  }
                 />
               </div>
             </>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 10 }}>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "2fr 1fr",
+                  gap: 10,
+                }}
+              >
                 <div>
                   <Label>Host</Label>
                   <Field
                     placeholder={meta.placeholders?.host || "localhost"}
                     value={(form as NetworkConn).host}
-                    onChange={(e) => setForm({ ...(form as NetworkConn), host: e.target.value })}
+                    onChange={(e) =>
+                      setForm({
+                        ...(form as NetworkConn),
+                        host: e.target.value,
+                      })
+                    }
                   />
                 </div>
                 <div>
@@ -797,7 +898,12 @@ export default function App() {
                   <Field
                     placeholder={meta.defaultPort || ""}
                     value={(form as NetworkConn).port}
-                    onChange={(e) => setForm({ ...(form as NetworkConn), port: e.target.value })}
+                    onChange={(e) =>
+                      setForm({
+                        ...(form as NetworkConn),
+                        port: e.target.value,
+                      })
+                    }
                   />
                 </div>
               </div>
@@ -811,7 +917,10 @@ export default function App() {
                       placeholder={meta.placeholders?.serviceName || "XEPDB1"}
                       value={(form as NetworkConn).serviceName || ""}
                       onChange={(e) =>
-                        setForm({ ...(form as NetworkConn), serviceName: e.target.value })
+                        setForm({
+                          ...(form as NetworkConn),
+                          serviceName: e.target.value,
+                        })
                       }
                     />
                   </div>
@@ -820,19 +929,33 @@ export default function App() {
                     <Field
                       placeholder={meta.placeholders?.user || ""}
                       value={(form as NetworkConn).user}
-                      onChange={(e) => setForm({ ...(form as NetworkConn), user: e.target.value })}
+                      onChange={(e) =>
+                        setForm({
+                          ...(form as NetworkConn),
+                          user: e.target.value,
+                        })
+                      }
                     />
                   </div>
                 </>
               ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 10,
+                  }}
+                >
                   <div>
                     <Label>Database</Label>
                     <Field
                       placeholder={meta.placeholders?.database || ""}
                       value={(form as NetworkConn).database || ""}
                       onChange={(e) =>
-                        setForm({ ...(form as NetworkConn), database: e.target.value })
+                        setForm({
+                          ...(form as NetworkConn),
+                          database: e.target.value,
+                        })
                       }
                     />
                   </div>
@@ -841,7 +964,12 @@ export default function App() {
                     <Field
                       placeholder={meta.placeholders?.user || ""}
                       value={(form as NetworkConn).user}
-                      onChange={(e) => setForm({ ...(form as NetworkConn), user: e.target.value })}
+                      onChange={(e) =>
+                        setForm({
+                          ...(form as NetworkConn),
+                          user: e.target.value,
+                        })
+                      }
                     />
                   </div>
                 </div>
@@ -853,7 +981,9 @@ export default function App() {
                   type="password"
                   placeholder="••••••••"
                   value={(form as any).password || ""}
-                  onChange={(e) => setForm({ ...(form as any), password: e.target.value })}
+                  onChange={(e) =>
+                    setForm({ ...(form as any), password: e.target.value })
+                  }
                 />
               </div>
             </>
@@ -861,7 +991,10 @@ export default function App() {
 
           <div style={{ display: "flex", gap: 8 }}>
             <Button onClick={save}>💾 Save</Button>
-            <Button onClick={testConnection} disabled={notice.kind === "loading"}>
+            <Button
+              onClick={testConnection}
+              disabled={notice.kind === "loading"}
+            >
               {notice.kind === "loading" ? "⏳ Testing…" : "🧪 Test Connection"}
             </Button>
           </div>
