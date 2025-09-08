@@ -81,8 +81,6 @@ async fn test_mysql(p: &Profile) -> Result<(), String> {
     let user = p.user.as_deref().ok_or("Missing user")?.to_string();
     let pass = p.password.as_deref().unwrap_or("").to_string();
 
-    eprintln!("[mysql] will connect host={host} port={port} db={db} user={user}");
-
     // Build options (explicitly disable SSL for now to avoid TLS negotiation hangs)
     let opts = OptsBuilder::default()
         .ip_or_hostname(host)
@@ -96,31 +94,20 @@ async fn test_mysql(p: &Profile) -> Result<(), String> {
     let pool = Pool::new(opts);
 
     // CONNECT (hard timeout)
-    eprintln!("[mysql] connecting…");
     let mut conn = timeout(Duration::from_secs(10), pool.get_conn()).await
         .map_err(|_| "db error: connect timed out".to_string())?
-        .map_err(|e| {
-            eprintln!("[mysql] connect error: {e}");
-            format!("db error: {e}")
-        })?;
-    eprintln!("[mysql] connected.");
+        .map_err(|e| { format!("db error: {e}") })?;
 
     // PROBE QUERY (hard timeout)
     use mysql_async::prelude::Queryable;
-    eprintln!("[mysql] running probe: SELECT 1");
     timeout(Duration::from_secs(5), Queryable::query_drop(&mut conn, "SELECT 1")).await
         .map_err(|_| "db error: query timed out".to_string())?
-        .map_err(|e| {
-            eprintln!("[mysql] query error: {e}");
-            format!("db error: {e}")
-        })?;
-    eprintln!("[mysql] probe OK.");
+        .map_err(|e| { format!("db error: {e}") })?;
 
     // CLEANUP
     let h = pool.disconnect();
     tauri::async_runtime::spawn(async move {
         let _ = h.await;
-        eprintln!("[mysql] disconnected.");
     });
     Ok(())
 }
