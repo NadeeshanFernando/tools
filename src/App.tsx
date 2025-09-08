@@ -751,6 +751,8 @@ export default function App() {
         ? "db"
         : form.dbType === "mongodb"
         ? "archive"
+        : form.dbType === "postgres"
+        ? "dump"
         : "sql";
 
     const compressDefault =
