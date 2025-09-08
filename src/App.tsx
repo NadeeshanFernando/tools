@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { save, open } from "@tauri-apps/plugin-dialog"; // v2 dialog plugin
+import { listen, UnlistenFn } from "@tauri-apps/api/event";
 
 /** ---------- Types ---------- */
 type DbType =
@@ -23,8 +25,7 @@ type NetworkConn = BaseConn & {
   database?: string; // pg/mysql/mariadb/mssql; for MongoDB = Auth DB
   serviceName?: string; // oracle
   user: string; // may be empty for Mongo/no-auth
-  // MongoDB convenience: full URI (if provided, we can skip host/port/user/password)
-  connectionUri?: string;
+  connectionUri?: string; // Mongo convenience
 };
 
 type SqliteConn = BaseConn & {
@@ -139,13 +140,12 @@ const DB_META: Record<
   mongodb: {
     label: "MongoDB",
     defaultPort: "27017",
-    // If connectionUri is provided, we skip host/port/user/password checks.
     needs: ["connectionUri", "host", "port", "database", "user", "password"],
     placeholders: {
       connectionUri: "mongodb://user:pw@localhost:27017/?directConnection=true",
       host: "localhost",
       port: "27017",
-      database: "admin", // Auth DB
+      database: "admin",
       user: "root",
     },
   },
@@ -166,8 +166,8 @@ const newNetworkConn = (dbType: Exclude<DbType, "sqlite">): NetworkConn => ({
       : dbType === "mysql" || dbType === "mariadb"
       ? "mysql"
       : dbType === "mongodb"
-      ? "admin" // Mongo Auth DB
-      : undefined, // oracle uses serviceName instead
+      ? "admin"
+      : undefined,
   serviceName: dbType === "oracle" ? "XEPDB1" : undefined,
   user:
     dbType === "mssql"
@@ -177,7 +177,7 @@ const newNetworkConn = (dbType: Exclude<DbType, "sqlite">): NetworkConn => ({
       : dbType === "oracle"
       ? "system"
       : dbType === "mongodb"
-      ? "" // allow no-auth by default
+      ? ""
       : "root",
   connectionUri: dbType === "mongodb" ? "" : undefined,
 });
@@ -189,7 +189,7 @@ const newSqliteConn = (): SqliteConn => ({
   filePath: "",
 });
 
-/** ---------- Persist Profiles (with migration from v1) ---------- */
+/** ---------- Persist Profiles ---------- */
 function loadProfilesV2(): Conn[] {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -274,6 +274,68 @@ const Button = (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
     }}
   />
 );
+
+/** ---------- Progress UI ---------- */
+function ProgressBar({ percent }: { percent: number | null }) {
+  return (
+    <div
+      style={{
+        width: "100%",
+        background: "#eee",
+        borderRadius: 8,
+        height: 10,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          width:
+            percent === null
+              ? "25%"
+              : `${Math.max(0, Math.min(100, percent))}%`,
+          height: "100%",
+          background: "#3b82f6",
+          transition: "width .25s ease",
+          animation: percent === null ? "indef 1.2s linear infinite" : "none",
+        }}
+      />
+      <style>{`
+        @keyframes indef {
+          0% { transform: translateX(-100%); }
+          100% { transform: translateX(400%); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function Backdrop({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,.25)",
+        display: "grid",
+        placeItems: "center",
+        zIndex: 50,
+      }}
+    >
+      <div
+        style={{
+          width: 560,
+          maxWidth: "92vw",
+          background: "#fff",
+          borderRadius: 12,
+          padding: 16,
+          boxShadow: "0 8px 30px rgba(0,0,0,.25)",
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /** ---------- DB Type Badges (icons) ---------- */
 const DB_BADGE: Record<
@@ -369,11 +431,9 @@ function makeDefaultForm(dbType: DbType): FormState {
 }
 
 function validateForm(form: FormState): string | null {
-  // Special-case MongoDB: if connectionUri provided, accept it and skip other checks.
   if (form.dbType === "mongodb") {
     const uri = (form as NetworkConn).connectionUri?.trim();
-    if (uri && uri.length > 0) return null; // URI mode
-    // Manual mode: require host/port; user/pw optional; database (auth DB) optional (defaults to admin)
+    if (uri && uri.length > 0) return null;
     if (!(form as NetworkConn).host || !(form as NetworkConn).port) {
       return "Fill required fields: Host, Port (or provide a Connection URI).";
     }
@@ -384,7 +444,6 @@ function validateForm(form: FormState): string | null {
 
   const needs = DB_META[form.dbType].needs;
   const missing = needs.filter((k) => {
-    // Skip connectionUri for non-mongo engines
     if (k === "connectionUri") return false;
     return !(form as any)[k] || String((form as any)[k]).trim() === "";
   });
@@ -421,11 +480,51 @@ async function withTimeout<T>(
   return Promise.race([p, t]) as Promise<T>;
 }
 
+type BackupState = {
+  open: boolean;
+  stage: string;
+  percent: number | null;
+  detail?: string;
+  log: string[];
+};
+
+type RestoreMode = "drop_and_restore" | "create_new";
+type RestoreState = {
+  open: boolean;
+  picking: boolean;
+  inProgress: boolean;
+  filePath: string | null;
+  mode: RestoreMode;
+  newDbName: string;
+  stage: string;
+  percent: number | null;
+  detail?: string;
+  log: string[];
+};
+
 export default function App() {
   const [profiles, setProfiles] = useState<Conn[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [form, setForm] = useState<FormState>(makeDefaultForm("postgres"));
   const [notice, setNotice] = useState<Notice>({ kind: "idle" });
+  const [backup, setBackup] = useState<BackupState>({
+    open: false,
+    stage: "starting",
+    percent: 0,
+    log: [],
+  });
+
+  const [restore, setRestore] = useState<RestoreState>({
+    open: false,
+    picking: false,
+    inProgress: false,
+    filePath: null,
+    mode: "drop_and_restore",
+    newDbName: "",
+    stage: "starting",
+    percent: 0,
+    log: [],
+  });
 
   useEffect(() => {
     const arr = loadProfiles();
@@ -444,6 +543,53 @@ export default function App() {
           : ({ ...(f as NetworkConn), password: "" } as FormState)
       );
     }
+  }, []);
+
+  useEffect(() => {
+    let unlistenBackup: UnlistenFn | null = null;
+    let unlistenRestore: UnlistenFn | null = null;
+    (async () => {
+      // Backup progress
+      unlistenBackup = await listen<{
+        stage: string;
+        percent?: number;
+        detail?: string;
+      }>("backup-progress", (evt) => {
+        const { stage, percent, detail } = evt.payload;
+        setBackup((prev) => ({
+          open: true,
+          stage,
+          percent: typeof percent === "number" ? percent : null,
+          detail,
+          log: detail
+            ? [...prev.log, `[${new Date().toLocaleTimeString()}] ${detail}`]
+            : prev.log,
+        }));
+      });
+
+      // Restore progress
+      unlistenRestore = await listen<{
+        stage: string;
+        percent?: number;
+        detail?: string;
+      }>("restore-progress", (evt) => {
+        const { stage, percent, detail } = evt.payload;
+        setRestore((prev) => ({
+          ...prev,
+          inProgress: stage !== "done" && stage !== "error",
+          stage,
+          percent: typeof percent === "number" ? percent : null,
+          detail,
+          log: detail
+            ? [...prev.log, `[${new Date().toLocaleTimeString()}] ${detail}`]
+            : prev.log,
+        }));
+      });
+    })();
+    return () => {
+      if (unlistenBackup) unlistenBackup();
+      if (unlistenRestore) unlistenRestore();
+    };
   }, []);
 
   const selected = useMemo(
@@ -514,7 +660,7 @@ export default function App() {
     setForm({ ...(fallback as NetworkConn), password: "" });
   }
 
-  function save() {
+  function saveConn() {
     const { password, ...toSave } = form as any;
     const idx = profiles.findIndex((p) => p.id === (form as any).id);
     const next = profiles.slice();
@@ -588,10 +734,171 @@ export default function App() {
     }
   }
 
+  async function doBackup() {
+    const err = validateForm(form);
+    if (err) {
+      setNotice({ kind: "err", msg: err });
+      return;
+    }
+
+    const ts = new Date().toISOString().replace(/:/g, "-").split(".")[0];
+    const base = `${(form as any).name || DB_META[form.dbType].label}-${ts}`;
+
+    const ext =
+      form.dbType === "mssql"
+        ? "bak"
+        : form.dbType === "sqlite"
+        ? "db"
+        : form.dbType === "mongodb"
+        ? "archive"
+        : "sql";
+
+    const compressDefault =
+      form.dbType === "postgres" || form.dbType === "mongodb";
+
+    const dest = await save({
+      title: "Save backup as…",
+      defaultPath: `${base}.${ext}`,
+      filters: [
+        { name: "All files", extensions: ["*"] },
+        { name: "SQL", extensions: ["sql"] },
+        { name: "Postgres custom dump", extensions: ["dump"] },
+        { name: "SQL Server BAK", extensions: ["bak"] },
+        { name: "Mongo archive", extensions: ["archive"] },
+        { name: "GZip", extensions: ["gz"] },
+      ],
+    });
+
+    if (!dest || typeof dest !== "string") return;
+
+    const compress =
+      form.dbType === "sqlite" || form.dbType === "mssql"
+        ? false
+        : compressDefault;
+
+    setBackup({
+      open: true,
+      stage: "starting",
+      percent: 0,
+      log: [],
+      detail: "Starting…",
+    });
+
+    try {
+      await invoke("backup_connection", {
+        profile: form,
+        destPath: dest,
+        compress,
+      });
+    } catch (e: any) {
+      setBackup((prev) => ({
+        ...prev,
+        stage: "error",
+        percent: null,
+        log: [...prev.log, String(e)],
+        detail: String(e),
+      }));
+    }
+  }
+
+  // ---------- Restore UI / logic (Postgres only for now) ----------
+  function openRestore() {
+    if (form.dbType !== "postgres") {
+      setNotice({
+        kind: "err",
+        msg: "Restore is currently implemented for PostgreSQL only.",
+      });
+      return;
+    }
+    setRestore({
+      open: true,
+      picking: false,
+      inProgress: false,
+      filePath: null,
+      mode: "drop_and_restore",
+      newDbName: "",
+      stage: "starting",
+      percent: 0,
+      log: [],
+    });
+  }
+
+  async function pickRestoreFile() {
+    setRestore((p) => ({ ...p, picking: true }));
+    const fp = await open({
+      title: "Select backup file to restore",
+      multiple: false,
+      directory: false,
+      filters: [
+        { name: "Postgres dumps", extensions: ["dump", "sql", "gz"] },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    setRestore((p) => ({
+      ...p,
+      picking: false,
+      filePath: typeof fp === "string" ? fp : null,
+    }));
+  }
+
+  function canStartRestore(): string | null {
+    if (!restore.filePath) return "Pick a backup file to restore.";
+    if (restore.mode === "create_new" && !restore.newDbName.trim()) {
+      return "Enter a new database name.";
+    }
+    return null;
+  }
+
+  async function startRestore() {
+    const err = validateForm(form);
+    if (err) {
+      setNotice({ kind: "err", msg: err });
+      return;
+    }
+    if (!restore.filePath) {
+      setNotice({ kind: "err", msg: "Pick a backup file to restore." });
+      return;
+    }
+    if (restore.mode === "create_new" && !restore.newDbName.trim()) {
+      setNotice({ kind: "err", msg: "Enter a new database name." });
+      return;
+    }
+
+    setRestore((p) => ({
+      ...p,
+      inProgress: true,
+      stage: "starting",
+      percent: 0,
+      log: [],
+    }));
+
+    try {
+      await invoke("restore_connection", {
+        profile: form,
+        srcPath: restore.filePath, // <-- camelCase to match what Tauri expects
+        opts: {
+          strategy: restore.mode, // "drop_and_restore" | "create_new"
+          newDbName:
+            restore.mode === "create_new" ? restore.newDbName.trim() : null,
+        },
+      });
+
+      // progress comes via "restore-progress" events
+    } catch (e: any) {
+      setRestore((prev) => ({
+        ...prev,
+        inProgress: false,
+        stage: "error",
+        percent: null,
+        log: [...prev.log, String(e)],
+        detail: String(e),
+      }));
+    }
+  }
+
   /** ----- render ----- */
   const meta = DB_META[form.dbType];
 
-  // Helpers to render connection preview lines in the sidebar
   const previewFor = (p: Conn) => {
     if (p.dbType === "sqlite") return (p as SqliteConn).filePath || "No file";
     if (p.dbType === "oracle")
@@ -710,7 +1017,7 @@ export default function App() {
           </div>
         )}
 
-        <div style={{ display: "grid", gap: 10, maxWidth: 620 }}>
+        <div style={{ display: "grid", gap: 10, maxWidth: 700 }}>
           {/* DB Type with badge */}
           <div>
             <div
@@ -990,15 +1297,260 @@ export default function App() {
           )}
 
           <div style={{ display: "flex", gap: 8 }}>
-            <Button onClick={save}>💾 Save</Button>
+            <Button onClick={saveConn}>💾 Save</Button>
             <Button
               onClick={testConnection}
               disabled={notice.kind === "loading"}
             >
               {notice.kind === "loading" ? "⏳ Testing…" : "🧪 Test Connection"}
             </Button>
+            <Button onClick={doBackup}>🗄️ Backup…</Button>
+            <Button onClick={openRestore}>🧩 Restore…</Button>
           </div>
         </div>
+
+        {/* Backup Modal */}
+        {backup.open && (
+          <Backdrop>
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <DbIcon type={form.dbType} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>
+                    Backing up:{" "}
+                    {(form as any).name || DB_META[form.dbType].label}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#555" }}>
+                    {backup.stage}
+                  </div>
+                </div>
+              </div>
+
+              <ProgressBar percent={backup.percent ?? null} />
+              {backup.detail && (
+                <div style={{ fontSize: 12, color: "#444" }}>
+                  {backup.detail}
+                </div>
+              )}
+
+              <div
+                style={{
+                  maxHeight: 160,
+                  overflow: "auto",
+                  background: "#fafafa",
+                  border: "1px solid #eee",
+                  borderRadius: 8,
+                  padding: 8,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  fontSize: 12,
+                }}
+              >
+                {backup.log.length === 0 ? (
+                  <div style={{ color: "#888" }}>No messages yet…</div>
+                ) : (
+                  backup.log.map((l, i) => <div key={i}>{l}</div>)
+                )}
+              </div>
+
+              <div
+                style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+              >
+                <Button
+                  onClick={() =>
+                    setBackup({
+                      open: false,
+                      stage: "starting",
+                      percent: 0,
+                      log: [],
+                    })
+                  }
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+          </Backdrop>
+        )}
+
+        {/* Restore Modal (Postgres) */}
+        {restore.open && (
+          <Backdrop>
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <DbIcon type={form.dbType} />
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>
+                    Restore – {(form as any).name || DB_META[form.dbType].label}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#555" }}>
+                    {restore.stage}
+                  </div>
+                </div>
+              </div>
+
+              {/* File picker & mode */}
+              <div style={{ display: "grid", gap: 8 }}>
+                <div>
+                  <Label>Backup file</Label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Field
+                      placeholder="Choose a .dump / .sql / .gz file…"
+                      value={restore.filePath ?? ""}
+                      readOnly
+                    />
+                    <Button
+                      onClick={pickRestoreFile}
+                      disabled={restore.picking || restore.inProgress}
+                    >
+                      {restore.picking ? "Picking…" : "Browse…"}
+                    </Button>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#666", marginTop: 4 }}>
+                    • Custom format (*.dump) will use <code>pg_restore</code>;
+                    plain SQL (*.sql) will use <code>psql</code>.
+                  </div>
+                </div>
+
+                <div>
+                  <Label>Restore mode</Label>
+                  <div style={{ display: "grid", gap: 6, marginTop: 6 }}>
+                    <label
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <input
+                        type="radio"
+                        name="restore-mode"
+                        checked={restore.mode === "drop_and_restore"}
+                        onChange={() =>
+                          setRestore((p) => ({
+                            ...p,
+                            mode: "drop_and_restore",
+                          }))
+                        }
+                        disabled={restore.inProgress}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          Drop all & restore into current database
+                        </div>
+                        <div style={{ fontSize: 12, color: "#666" }}>
+                          Drops all objects in{" "}
+                          <strong>
+                            {(form as NetworkConn).database || "postgres"}
+                          </strong>{" "}
+                          then restores.
+                        </div>
+                      </div>
+                    </label>
+
+                    <label
+                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                    >
+                      <input
+                        type="radio"
+                        name="restore-mode"
+                        checked={restore.mode === "create_new"}
+                        onChange={() =>
+                          setRestore((p) => ({ ...p, mode: "create_new" }))
+                        }
+                        disabled={restore.inProgress}
+                      />
+                      <div style={{ width: "100%" }}>
+                        <div style={{ fontWeight: 600 }}>
+                          Create new database & restore
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 12,
+                            color: "#666",
+                            marginBottom: 6,
+                          }}
+                        >
+                          Creates a fresh database and restores into it.
+                        </div>
+                        <div
+                          style={{
+                            display: "grid",
+                            gridTemplateColumns: "1fr 200px",
+                            gap: 8,
+                          }}
+                        >
+                          <Field
+                            placeholder="new_database_name"
+                            value={restore.newDbName}
+                            onChange={(e) =>
+                              setRestore((p) => ({
+                                ...p,
+                                newDbName: e.target.value,
+                              }))
+                            }
+                            disabled={
+                              restore.inProgress ||
+                              restore.mode !== "create_new"
+                            }
+                          />
+                          <div />
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress */}
+              <ProgressBar percent={restore.percent ?? null} />
+              {restore.detail && (
+                <div style={{ fontSize: 12, color: "#444" }}>
+                  {restore.detail}
+                </div>
+              )}
+
+              {/* Log */}
+              <div
+                style={{
+                  maxHeight: 180,
+                  overflow: "auto",
+                  background: "#fafafa",
+                  border: "1px solid #eee",
+                  borderRadius: 8,
+                  padding: 8,
+                  fontFamily:
+                    "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  fontSize: 12,
+                }}
+              >
+                {restore.log.length === 0 ? (
+                  <div style={{ color: "#888" }}>No messages yet…</div>
+                ) : (
+                  restore.log.map((l, i) => <div key={i}>{l}</div>)
+                )}
+              </div>
+
+              <div
+                style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+              >
+                {!restore.inProgress ? (
+                  <>
+                    <Button
+                      onClick={() => setRestore((p) => ({ ...p, open: false }))}
+                    >
+                      Close
+                    </Button>
+                    <Button
+                      onClick={startRestore}
+                      disabled={!!canStartRestore()}
+                    >
+                      Start Restore
+                    </Button>
+                  </>
+                ) : (
+                  <Button disabled>Restoring…</Button>
+                )}
+              </div>
+            </div>
+          </Backdrop>
+        )}
       </main>
     </div>
   );
