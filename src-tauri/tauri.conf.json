@@ -13,9 +13,10 @@
     "windows": [
       {
         "title": "Octopus",
-        "width": 720,
-        "height": 500,
-        "resizable": true,
+        "width": 750,
+        "height": 600,
+        "center": true,  
+        "resizable": false,
         "maximizable": false
       }
     ],
