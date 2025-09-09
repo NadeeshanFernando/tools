@@ -1,5 +1,5 @@
 // Composes sidebar + form + modals; orchestrates top-level state.
-import React, { useState } from "react";
+import { useState } from "react";
 import { useConnections } from "../src/features/connections/useConnections";
 import { ConnectionsSidebar } from "../src/features/connections/ConnectionsSidebar";
 import { ConnectionForm } from "../src/features/connections/ConnectionForm";

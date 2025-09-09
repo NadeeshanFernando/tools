@@ -1,5 +1,5 @@
 // Stores DB metadata (labels, defaults, required fields) and constructors.
-import { Conn, DbType, NetworkConn, SqliteConn } from "./types";
+import { DbType, NetworkConn, SqliteConn } from "./types";
 
 export const DB_META: Record<
   DbType,
