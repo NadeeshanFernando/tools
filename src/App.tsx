@@ -1321,8 +1321,8 @@ export default function App() {
             >
               {notice.kind === "loading" ? "⏳ Testing…" : "🧪 Test Connection"}
             </Button>
-            <Button onClick={doBackup}>🗄️ Backup…</Button>
-            <Button onClick={openRestore}>🧩 Restore…</Button>
+            <Button onClick={doBackup}>🗄️ Backup</Button>
+            <Button onClick={openRestore}>🧩 Restore</Button>
           </div>
         </div>
 
