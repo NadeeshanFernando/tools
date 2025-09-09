@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog"; // v2 dialog plugin
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import octopusLogo from "../src-tauri/icons/Square44x44Logo.png";
 
 /** ---------- Types ---------- */
 type DbType =
@@ -985,7 +986,21 @@ export default function App() {
 
       {/* Main */}
       <main style={{ padding: 14 }}>
-        <h3 style={{ margin: "4px 0 8px" }}>DB Backup Client – Setup</h3>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            margin: "4px 0 8px",
+          }}
+        >
+          <img
+            src={octopusLogo}
+            alt="Octopus Logo"
+            style={{ width: 50, height: 50, borderRadius: 6 }}
+          />
+          <h3 style={{ margin: 0 }}>Octopus DB Backup</h3>
+        </div>
 
         {/* Top notice bar */}
         {notice.kind !== "idle" && (

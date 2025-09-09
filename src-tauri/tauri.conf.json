@@ -12,10 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "DB Backup Client",
+        "title": "Octopus",
         "width": 720,
         "height": 500,
-        "resizable": true
+        "resizable": true,
+        "maximizable": false
       }
     ],
     "security": {
