@@ -1,9 +1,9 @@
 // Validates forms and builds defaults for a given DB type.
 import { DB_META, newNetworkConn, newSqliteConn } from "./dbMeta";
-import { FormState } from "./types";
+import { FormState, DbType } from "./types";
 
 // Creates a default form for a DB type.
-export function makeDefaultForm(dbType: any): FormState {
+export function makeDefaultForm(dbType: DbType): FormState {
   return dbType === "sqlite" ? { ...newSqliteConn() } : { ...newNetworkConn(dbType), password: "" };
 }
 

@@ -6,7 +6,7 @@ import { Select } from "../../components/ui/Select";
 import { Button } from "../../components/ui/Button";
 import { NoticeBar } from "../../components/ui/NoticeBar";
 import { DbIcon } from "../../components/ui/DbIcon";
-import { FormState, NetworkConn, SqliteConn } from "./types";
+import { FormState, NetworkConn, SqliteConn, DbType } from "./types";
 import { DB_META } from "./dbMeta";
 
 // (Optional) show your logo instead of the gray box:
@@ -16,7 +16,7 @@ export const ConnectionForm: React.FC<{
   form: FormState;
   setForm: (f:FormState)=>void;
   notice: {kind:"idle"|"ok"|"err"|"loading"; msg?:string};
-  onDbTypeChange: (db:any)=>void;
+  onDbTypeChange: (db:DbType)=>void;
   onSave: ()=>void;
   onTest: ()=>void;
   onBackup: ()=>void;
@@ -45,7 +45,7 @@ export const ConnectionForm: React.FC<{
             <Label>Database Type</Label>
             <DbIcon type={form.dbType as any} />
           </div>
-          <Select value={form.dbType} onChange={(e)=>onDbTypeChange(e.target.value)}>
+          <Select value={form.dbType} onChange={(e)=>onDbTypeChange(e.target.value as DbType)}>
             <option value="postgres">PostgreSQL</option>
             <option value="mysql">MySQL</option>
             <option value="mariadb">MariaDB</option>
